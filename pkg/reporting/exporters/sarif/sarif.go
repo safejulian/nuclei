@@ -3,8 +3,10 @@ package sarif
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path"
+	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -12,6 +14,8 @@ import (
 	"github.com/projectdiscovery/nuclei/v3/pkg/output"
 	"github.com/projectdiscovery/sarif"
 )
+
+const nucleiTemplatesURL = "https://github.com/projectdiscovery/nuclei-templates"
 
 // Exporter is an exporter for nuclei sarif output format.
 type Exporter struct {
@@ -55,8 +59,10 @@ func (exporter *Exporter) addToolDetails() {
 		},
 		FullName:        "Nuclei " + config.Version,
 		SemanticVersion: config.Version,
-		DownloadURI:     "https://github.com/projectdiscovery/nuclei/releases",
-		Rules:           exporter.rules,
+		DownloadUri:     "https://github.com/projectdiscovery/nuclei/releases",
+		InformationUri:  "https://github.com/projectdiscovery/nuclei",
+
+		Rules: exporter.rules,
 	}
 	exporter.sarif.RegisterTool(driver)
 
@@ -93,6 +99,56 @@ func (exporter *Exporter) getSeverity(severity string) (sarif.Level, string) {
 	return sarif.None, "9.5"
 }
 
+// helpURI returns the best available URI for the given result event.
+// Priority: 1) verified template cloud URL 2) first reference link 3) nuclei-templates repo.
+func helpURI(event *output.ResultEvent) string {
+	if event.TemplateURL != "" {
+		return event.TemplateURL
+	}
+	if event.Info.Reference != nil {
+		for _, ref := range event.Info.Reference.ToSlice() {
+			if u, err := url.ParseRequestURI(ref); err == nil && u.Scheme != "" && u.Host != "" {
+				return ref
+			}
+		}
+	}
+	return nucleiTemplatesURL
+}
+
+// fullDescription builds the rule full-description text. When a help URL is
+// available it is appended so readers can navigate to further information.
+func fullDescription(event *output.ResultEvent, uri string) string {
+	base := event.Info.Description
+	if uri != nucleiTemplatesURL {
+		return base + "\nMore details at\n" + uri + "\n"
+	}
+	if base == "" {
+		return "No description found in template, have a look for the " + event.TemplateID + " template."
+	}
+	return base
+}
+
+// toPascalCase converts a kebab-case template ID (e.g. "fuzzing-params-xss")
+// to a PascalCase identifier (e.g. "FuzzingParamsXss") as required by SARIF rule names.
+func toPascalCase(id string) string {
+	parts := strings.FieldsFunc(id, func(r rune) bool { return r == '-' || r == '_' })
+	for i, p := range parts {
+		if len(p) > 0 {
+			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// helpText returns remediation guidance for the given result event.
+// Falls back to a generic message if no remediation is specified in the template.
+func helpText(event *output.ResultEvent) string {
+	if event.Info.Remediation != "" {
+		return event.Info.Remediation
+	}
+	return "No remediation guidance is available for " + event.TemplateID + ". See the HelpUri for more information."
+}
+
 // Export exports a passed result event to sarif structure
 func (exporter *Exporter) Export(event *output.ResultEvent) error {
 	exporter.mutex.Lock()
@@ -102,6 +158,8 @@ func (exporter *Exporter) Export(event *output.ResultEvent) error {
 	resultHeader := fmt.Sprintf("%v (%v) found on %v", event.Info.Name, event.TemplateID, event.Host)
 	resultLevel, vulnRating := exporter.getSeverity(severity)
 
+	uri := helpURI(event)
+
 	// Extra metadata if generated sarif is uploaded to GitHub security page
 	ghMeta := map[string]interface{}{}
 	ghMeta["tags"] = []string{"security"}
@@ -110,11 +168,14 @@ func (exporter *Exporter) Export(event *output.ResultEvent) error {
 	// rule contain details of template
 	rule := sarif.ReportingDescriptor{
 		Id:   event.TemplateID,
-		Name: event.Info.Name,
+		Name: toPascalCase(event.TemplateID),
 		FullDescription: &sarif.MultiformatMessageString{
-			// Points to template URL
-			Text: event.Info.Description + "\nMore details at\n" + event.TemplateURL + "\n",
+			Text: fullDescription(event, uri),
 		},
+		Help: &sarif.MultiformatMessageString{
+			Text: helpText(event),
+		},
+		HelpUri:    uri,
 		Properties: ghMeta,
 	}
 
@@ -141,9 +202,7 @@ func (exporter *Exporter) Export(event *output.ResultEvent) error {
 		},
 		PhysicalLocation: sarif.PhysicalLocation{
 			ArtifactLocation: sarif.ArtifactLocation{
-				// GitHub only accepts file:// protocol and local & relative files only
-				// to avoid errors // is used which also translates to file according to specification
-				Uri: "/" + event.Path,
+				Uri: strings.TrimLeft(event.Path, "/"),
 				Description: &sarif.Message{
 					Text: path.Join(event.Host, event.Path),
 				},
@@ -161,9 +220,6 @@ func (exporter *Exporter) Export(event *output.ResultEvent) error {
 			Text: resultHeader,
 		},
 		Locations: []sarif.Location{location},
-		Rule: sarif.ReportingDescriptorReference{
-			Id: rule.Id,
-		},
 	}
 
 	exporter.sarif.RegisterResult(*result)

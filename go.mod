@@ -107,7 +107,7 @@ require (
 	github.com/projectdiscovery/networkpolicy v0.1.34
 	github.com/projectdiscovery/ratelimit v0.0.83
 	github.com/projectdiscovery/rdap v0.9.0
-	github.com/projectdiscovery/sarif v0.0.1
+	github.com/projectdiscovery/sarif v0.0.2-0.20240423085715-566622bdef3e
 	github.com/projectdiscovery/tlsx v1.2.2
 	github.com/projectdiscovery/uncover v1.2.0
 	github.com/projectdiscovery/useragent v0.0.107
@@ -433,3 +433,5 @@ require (
 
 // https://go.dev/ref/mod#go-mod-file-retract
 retract v3.2.0 // retract due to broken js protocol issue
+
+replace github.com/projectdiscovery/sarif => ../sarif
