@@ -434,4 +434,4 @@ require (
 // https://go.dev/ref/mod#go-mod-file-retract
 retract v3.2.0 // retract due to broken js protocol issue
 
-replace github.com/projectdiscovery/sarif => ../sarif
+replace github.com/projectdiscovery/sarif => github.com/safejulian/sarif v0.0.0-20260330030818-e2609c67a829
